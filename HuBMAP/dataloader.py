@@ -7,7 +7,6 @@ from tqdm import tqdm
 import numpy as np
 import numba
 from rasterio.windows import Window
-
 identity = rasterio.Affine(1, 0, 0, 0, 1, 0)
 
 

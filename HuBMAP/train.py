@@ -17,12 +17,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data as D
 from dataloader import HubDataset
+from model import *
+from loss import *
+from torch.utils.tensorboard import SummaryWriter
 
-import torchvision
+writer = SummaryWriter()
 
 DATA_PATH = '/data/home/zhaohj/dev/dataset/kaggle-hubmap-kidney-segmentation'
-fcn_pth_path = "input/pretrain-coco-weights-pytorch/fcn_resnet50_coco-1167a1af.pth"
-
+pth_save_path = 'path/model_best.pth'
 EPOCHES = 5
 BATCH_SIZE = 16
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -79,30 +81,7 @@ vloader = D.DataLoader(
     valid_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
 
 
-def get_model():
-    model = torchvision.models.segmentation.fcn_resnet50(False)
-
-    pth = torch.load(fcn_pth_path)
-    for key in ["aux_classifier.0.weight", "aux_classifier.1.weight", "aux_classifier.1.bias",
-                "aux_classifier.1.running_mean", "aux_classifier.1.running_var", "aux_classifier.1.num_batches_tracked",
-                "aux_classifier.4.weight", "aux_classifier.4.bias"]:
-        del pth[key]
-
-    model.classifier[4] = nn.Conv2d(512, 1, kernel_size=(1, 1), stride=(1, 1))
-    return model
-
-
-def get_unet_model():
-    model = smp.Unet(
-        encoder_name='efficientnet-b7',
-        encoder_weights='imagenet',
-        in_channels=3,
-        classes=1
-    )
-    return model
-
-
-def validation(model, loader, loss_fn):
+def validation(model: torch.nn.Module, loader, loss_fn):
     losses = []
     model.eval()
     for image, target in loader:
@@ -114,13 +93,7 @@ def validation(model, loader, loss_fn):
     return np.array(losses).mean()
 
 
-# !mkdir -p /root/.cache/torch/hub/checkpoints/
-# !cp ../input/pytorch-pretrained-models/resnet50-19c8e357.pth /root/.cache/torch/hub/checkpoints/
-# !cp ../input/pretrain-coco-weights-pytorch/fcn_resnet50_coco-1167a1af.pth /root/.cache/torch/hub/checkpoints/
-
-
 model = get_unet_model()
-# model = get_model()
 model.to(DEVICE)
 model = nn.DataParallel(model)
 optimizer = torch.optim.AdamW(model.parameters(),
@@ -132,37 +105,7 @@ Epoch |  Loss |  Loss | Time, m
 #          Epoch         metrics            time
 raw_line = '{:6d}' + '\u2502{:7.3f}' * 2 + '\u2502{:6.2f}'
 
-
-class SoftDiceLoss(nn.Module):
-    def __init__(self, smooth=1., dims=(-2, -1)):
-        super(SoftDiceLoss, self).__init__()
-        self.smooth = smooth
-        self.dims = dims
-
-    def forward(self, x, y):
-        tp = (x * y).sum(self.dims)
-        fp = (x * (1 - y)).sum(self.dims)
-        fn = ((1 - x) * y).sum(self.dims)
-
-        dc = (2 * tp + self.smooth) / (2 * tp + fp + fn + self.smooth)
-        dc = dc.mean()
-
-        return 1 - dc
-
-
 # train
-
-bce_fn = nn.BCEWithLogitsLoss()
-dice_fn = SoftDiceLoss()
-
-
-def loss_fn(y_pred, y_true):
-    bce = bce_fn(y_pred, y_true)
-    dice = dice_fn(y_pred.sigmoid(), y_true)
-    return 0.8 * bce + 0.2 * dice
-
-
-print(header)
 
 best_loss = 10
 EPOCHES = 20
@@ -173,19 +116,18 @@ for epoch in range(1, EPOCHES + 1):
     for image, target in loader:
         image, target = image.to(DEVICE), target.float().to(DEVICE)
         optimizer.zero_grad()
-        # output = model(image)['out']
         output = model(image)
         loss = loss_fn(output, target)
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
     vloss = validation(model, vloader, loss_fn)
+    writer.add_scalar('Loss/train', np.array(losses).mean(), epoch)
+    writer.add_scalar('Loss/test', vloss, epoch)
     print(raw_line.format(epoch, np.array(losses).mean(), vloss,
                           (time.time() - start_time) / 60 ** 1))
-    losses = []
-
     if vloss < best_loss:
         best_loss = vloss
-        torch.save(model.state_dict(), 'model_best.pth')
+        torch.save(model.state_dict(), pth_save_path)
 del loader, vloader, train_ds, valid_ds, ds
 gc.collect()
