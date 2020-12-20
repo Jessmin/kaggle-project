@@ -7,6 +7,8 @@ from tqdm import tqdm
 import numpy as np
 import numba
 from rasterio.windows import Window
+import cv2
+
 identity = rasterio.Affine(1, 0, 0, 0, 1, 0)
 
 
@@ -57,6 +59,7 @@ def rle_numba(pixels):
     if pixels[-1] == 1: points.append(size - points[-1] + 1)
     return points
 
+
 def rle_numba_encode(image):
     pixels = image.flatten(order='F')
     points = rle_numba(pixels)
@@ -85,19 +88,24 @@ def make_grid(shape, window=256, min_overlap=32):
     return slices.reshape(nx * ny, 4)
 
 
+identity = rasterio.Affine(1, 0, 0, 0, 1, 0)
+
+
 class HubDataset(D.Dataset):
 
-    def __init__(self, root_dir, transform,
-                 window=256, overlap=32, threshold=100):
-        self.path = pathlib.Path(root_dir)
+    def __init__(self, path, tiff_ids, transform,
+                 window=256, overlap=32, threshold=100, isvalid=False):
+        self.path = pathlib.Path(path)
+        self.tiff_ids = tiff_ids
         self.overlap = overlap
         self.window = window
         self.transform = transform
         self.csv = pd.read_csv((self.path / 'train.csv').as_posix(),
                                index_col=[0])
         self.threshold = threshold
+        self.isvalid = isvalid
 
-        self.x, self.y = [], []
+        self.x, self.y, self.id = [], [], []
         self.build_slices()
         self.len = len(self.x)
         self.as_tensor = T.Compose([
@@ -111,29 +119,39 @@ class HubDataset(D.Dataset):
         self.files = []
         self.slices = []
         for i, filename in enumerate(self.csv.index.values):
+            if not filename in self.tiff_ids:
+                continue
+
             filepath = (self.path / 'train' / (filename + '.tiff')).as_posix()
             self.files.append(filepath)
 
-            print('Transform', filename)
+            # print('Transform', filename)
             with rasterio.open(filepath, transform=identity) as dataset:
                 self.masks.append(rle_decode(self.csv.loc[filename, 'encoding'], dataset.shape))
                 slices = make_grid(dataset.shape, window=self.window, min_overlap=self.overlap)
 
-                for slc in tqdm(slices):
+                for slc in slices:
                     x1, x2, y1, y2 = slc
-                    if self.masks[-1][x1:x2, y1:y2].sum() > self.threshold or np.random.randint(100) > 120:
+                    # print(slc)
+                    image = dataset.read([1, 2, 3],
+                                         window=Window.from_slices((x1, x2), (y1, y2)))
+                    image = np.moveaxis(image, 0, -1)
+
+                    image = cv2.resize(image, (256, 256))
+                    masks = cv2.resize(self.masks[-1][x1:x2, y1:y2], (256, 256))
+
+                    if self.isvalid:
                         self.slices.append([i, x1, x2, y1, y2])
-
-                        image = dataset.read([1, 2, 3],
-                                             window=Window.from_slices((x1, x2), (y1, y2)))
-
-                        #                         if image.std().mean() < 10:
-                        #                             continue
-
-                        # print(image.std().mean(), self.masks[-1][x1:x2,y1:y2].sum())
-                        image = np.moveaxis(image, 0, -1)
                         self.x.append(image)
-                        self.y.append(self.masks[-1][x1:x2, y1:y2])
+                        self.y.append(masks)
+                        self.id.append(filename)
+                    else:
+                        if self.masks[-1][x1:x2, y1:y2].sum() >= self.threshold or (image > 32).mean() > 0.99:
+                            self.slices.append([i, x1, x2, y1, y2])
+
+                            self.x.append(image)
+                            self.y.append(masks)
+                            self.id.append(filename)
 
     # get data operation
     def __getitem__(self, index):

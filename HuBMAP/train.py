@@ -1,60 +1,34 @@
+import glob
 import os.path as path
 import sys
 
 sys.path.append(path.join(path.dirname(__file__), '..'))
 
-import torchvision
-import torch
 import numpy as np
-import pandas as pd
 import numba, cv2, gc
 import pathlib, sys, os, random, time
 import matplotlib.pyplot as plt
 import albumentations as A
-import segmentation_models_pytorch as smp
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.utils.data as D
 from dataloader import HubDataset
 from model import *
 from loss import *
 from torch.utils.tensorboard import SummaryWriter
+from sklearn.model_selection import KFold
+import logging
 
 writer = SummaryWriter()
 
-DATA_PATH = '/data/home/zhaohj/dev/dataset/kaggle-hubmap-kidney-segmentation'
+DATA_PATH = 'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/'
 pth_save_path = 'path/model_best.pth'
 EPOCHES = 5
-BATCH_SIZE = 16
+BATCH_SIZE = 8
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 WINDOW = 1024
-MIN_OVERLAP = 32
+MIN_OVERLAP = 40
 NEW_SIZE = 256
 
-trfm = A.Compose([
-    A.Resize(NEW_SIZE, NEW_SIZE),
-    A.HorizontalFlip(p=0.5),
-    A.VerticalFlip(p=0.5),
 
-    A.OneOf([
-        A.RandomContrast(),
-        A.RandomGamma(),
-        A.RandomBrightness(),
-        A.ColorJitter(brightness=0.07, contrast=0.07,
-                      saturation=0.1, hue=0.1, always_apply=False, p=0.3),
-    ], p=0.3),
-    A.OneOf([
-        A.ElasticTransform(alpha=120, sigma=120 * 0.05, alpha_affine=120 * 0.03),
-        A.GridDistortion(),
-        A.OpticalDistortion(distort_limit=2, shift_limit=0.5),
-    ], p=0.0),
-    A.ShiftScaleRotate(),
-])
-
-ds = HubDataset(DATA_PATH, window=WINDOW, overlap=MIN_OVERLAP, transform=trfm)
-
-image, mask = ds[2]
 # plt.figure(figsize=(16,8))
 # plt.subplot(121)
 # plt.imshow(mask[0], cmap='gray')
@@ -63,71 +37,140 @@ image, mask = ds[2]
 
 # _ = rle_numba_encode(mask[0])  # compile function with numba
 
-valid_idx, train_idx = [], []
-for i in range(len(ds)):
-    if ds.slices[i][0] == 7:
-        valid_idx.append(i)
-    else:
-        train_idx.append(i)
+def np_dice_score(probability, mask):
+    p = probability.reshape(-1)
+    t = mask.reshape(-1)
 
-train_ds = D.Subset(ds, train_idx)
-valid_ds = D.Subset(ds, valid_idx)
+    p = p > 0.5
+    t = t > 0.5
+    uion = p.sum() + t.sum()
 
-# define training and validation data loaders
-loader = D.DataLoader(
-    train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
-
-vloader = D.DataLoader(
-    valid_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+    overlap = (p * t).sum()
+    dice = 2 * overlap / (uion + 0.001)
+    return dice
 
 
-def validation(model: torch.nn.Module, loader, loss_fn):
-    losses = []
+def validation(model, val_loader, criterion):
+    val_probability, val_mask = [], []
     model.eval()
-    for image, target in loader:
-        image, target = image.to(DEVICE), target.float().to(DEVICE)
-        output = model(image)
-        loss = loss_fn(output, target)
-        losses.append(loss.item())
+    with torch.no_grad():
+        for image, target in val_loader:
+            image, target = image.to(DEVICE), target.float().to(DEVICE)
+            output = model(image)
 
-    return np.array(losses).mean()
+            output_ny = output.sigmoid().data.cpu().numpy()
+            target_np = target.data.cpu().numpy()
+
+            val_probability.append(output_ny)
+            val_mask.append(target_np)
+
+    val_probability = np.concatenate(val_probability)
+    val_mask = np.concatenate(val_mask)
+
+    return np_dice_score(val_probability, val_mask)
 
 
-model = get_unet_model()
-model.to(DEVICE)
-model = nn.DataParallel(model)
-optimizer = torch.optim.AdamW(model.parameters(),
-                              lr=1e-4, weight_decay=1e-3)
-header = r'''
-        Train | Valid
-Epoch |  Loss |  Loss | Time, m
-'''
-#          Epoch         metrics            time
-raw_line = '{:6d}' + '\u2502{:7.3f}' * 2 + '\u2502{:6.2f}'
+train_trfm = A.Compose([
+    # A.RandomCrop(NEW_SIZE*3, NEW_SIZE*3),
+    A.Resize(NEW_SIZE, NEW_SIZE),
+    A.HorizontalFlip(p=0.5),
+    A.VerticalFlip(p=0.5),
+    A.RandomRotate90(),
+    A.OneOf([
+        A.RandomContrast(),
+        A.RandomGamma(),
+        A.RandomBrightness(),
+        A.ColorJitter(brightness=0.07, contrast=0.07,
+                      saturation=0.1, hue=0.1, always_apply=False, p=0.3),
+    ], p=0.3),
+    #     A.OneOf([
+    #         A.OpticalDistortion(p=0.5),
+    #         A.GridDistortion(p=0.5),
+    #         A.IAAPiecewiseAffine(p=0.5),
+    #     ], p=0.3),
+    #     A.ShiftScaleRotate(),
+])
 
-# train
+val_trfm = A.Compose([
+    # A.CenterCrop(NEW_SIZE, NEW_SIZE),
+    A.Resize(NEW_SIZE, NEW_SIZE),
+    A.HorizontalFlip(p=0.5),
+    A.VerticalFlip(p=0.5),
+    A.RandomRotate90(),
+    #     A.OneOf([
+    #         A.RandomContrast(),
+    #         A.RandomGamma(),
+    #         A.RandomBrightness(),
+    #         A.ColorJitter(brightness=0.07, contrast=0.07,
+    #                    saturation=0.1, hue=0.1, always_apply=False, p=0.3),
+    #         ], p=0.3),
+    #     A.OneOf([
+    #         A.OpticalDistortion(p=0.5),
+    #         A.GridDistortion(p=0.5),
+    #         A.IAAPiecewiseAffine(p=0.5),
+    #     ], p=0.3),
+    #     A.ShiftScaleRotate(),
+])
 
-best_loss = 10
-EPOCHES = 20
-for epoch in range(1, EPOCHES + 1):
+
+def train(model, train_loader, criterion, optimizer):
     losses = []
-    start_time = time.time()
-    model.train()
-    for image, target in loader:
+    for i, (image, target) in enumerate(train_loader):
         image, target = image.to(DEVICE), target.float().to(DEVICE)
         optimizer.zero_grad()
+
         output = model(image)
-        loss = loss_fn(output, target)
+        loss = criterion(output, target, 1, False)
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
-    vloss = validation(model, vloader, loss_fn)
-    writer.add_scalar('Loss/train', np.array(losses).mean(), epoch)
-    writer.add_scalar('Loss/test', vloss, epoch)
-    print(raw_line.format(epoch, np.array(losses).mean(), vloss,
-                          (time.time() - start_time) / 60 ** 1))
-    if vloss < best_loss:
-        best_loss = vloss
-        torch.save(model.state_dict(), pth_save_path)
-del loader, vloader, train_ds, valid_ds, ds
-gc.collect()
+        # print('train, ', loss.item())
+    return np.array(losses).mean()
+
+
+tiff_ids = np.array([x.split('\\')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
+# tiff_ids = np.array([x.split('/')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
+skf = KFold(n_splits=8)
+for fold_idx, (train_idx, val_idx) in enumerate(skf.split(tiff_ids, tiff_ids)):
+    print(tiff_ids[val_idx])
+    # break
+    train_ds = HubDataset(DATA_PATH, tiff_ids[train_idx], window=WINDOW, overlap=MIN_OVERLAP,
+                          threshold=100, transform=train_trfm)
+    valid_ds = HubDataset(DATA_PATH, tiff_ids[val_idx], window=WINDOW, overlap=MIN_OVERLAP,
+                          threshold=100, transform=val_trfm, isvalid=False)
+    print(len(train_ds), len(valid_ds))
+    # define training and validation data loaders
+    train_loader = D.DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=12)
+
+    val_loader = D.DataLoader(valid_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=12)
+
+    model = get_unet_model()
+    model.to(DEVICE)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-3)
+
+    lr_step = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 2)
+    # lr_step = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=5)
+    header = r'''
+            Train | Valid
+    Epoch |  Loss |  Loss | Time, m
+    '''
+    #          Epoch         metrics            time
+    raw_line = '{:6d}' + '\u2502{:7.3f}' * 2 + '\u2502{:6.2f}'
+
+    best_dice = 0
+    for epoch in range(1, EPOCHES + 1):
+        start_time = time.time()
+        model.train()
+        train_loss = train(model, train_loader, loss_fn, optimizer)
+        val_dice = validation(model, val_loader, loss_fn)
+        lr_step.step(val_dice)
+
+        if val_dice > best_dice:
+            best_dice = val_dice
+            torch.save(model.state_dict(), 'fold_{0}.pth'.format(fold_idx))
+        logging.info(raw_line.format(epoch, train_loss, val_dice, best_dice, (time.time() - start_time) / 60 ** 1))
+
+    del train_loader, val_loader, train_ds, valid_ds
+    gc.collect()
+    break
