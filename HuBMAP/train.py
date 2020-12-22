@@ -17,10 +17,24 @@ from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import KFold
 import logging
 
+
+def set_seeds(seed=42):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = True
+
+set_seeds()
+
 writer = SummaryWriter()
 
-DATA_PATH = 'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/'
-pth_save_path = 'path/model_best.pth'
+DATA_PATH = '/home/zhaohoj/development_sshfs/dataset/kaggle-hubmap-kidney-segmentation/'
+# DATA_PATH = 'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/'
+pth_save_path = 'pth/model_best.pth'
 EPOCHES = 5
 BATCH_SIZE = 8
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -128,8 +142,12 @@ def train(model, train_loader, criterion, optimizer):
     return np.array(losses).mean()
 
 
-tiff_ids = np.array([x.split('\\')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
-# tiff_ids = np.array([x.split('/')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
+import platform
+if platform.system() == 'Linux':
+    tiff_ids = np.array([x.split('/')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
+else:
+    tiff_ids = np.array([x.split('\\')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
+
 skf = KFold(n_splits=8)
 for fold_idx, (train_idx, val_idx) in enumerate(skf.split(tiff_ids, tiff_ids)):
     print(tiff_ids[val_idx])
@@ -169,7 +187,7 @@ for fold_idx, (train_idx, val_idx) in enumerate(skf.split(tiff_ids, tiff_ids)):
         if val_dice > best_dice:
             best_dice = val_dice
             torch.save(model.state_dict(), 'fold_{0}.pth'.format(fold_idx))
-        logging.info(raw_line.format(epoch, train_loss, val_dice, best_dice, (time.time() - start_time) / 60 ** 1))
+        print(raw_line.format(epoch, train_loss, val_dice, best_dice, (time.time() - start_time) / 60 ** 1))
 
     del train_loader, val_loader, train_ds, valid_ds
     gc.collect()

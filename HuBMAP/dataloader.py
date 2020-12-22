@@ -11,7 +11,6 @@ import cv2
 
 identity = rasterio.Affine(1, 0, 0, 0, 1, 0)
 
-
 # used for converting the decoded image to rle mask
 def rle_encode(im):
     '''
