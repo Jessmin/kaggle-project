@@ -141,54 +141,56 @@ def train(model, train_loader, criterion, optimizer):
         # print('train, ', loss.item())
     return np.array(losses).mean()
 
+if __name__ == '__main__':
+    import platform
 
-import platform
-if platform.system() == 'Linux':
-    tiff_ids = np.array([x.split('/')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
-else:
-    tiff_ids = np.array([x.split('\\')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
+    if platform.system() == 'Linux':
+        tiff_ids = np.array([x.split('/')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
+    else:
+        tiff_ids = np.array([x.split('\\')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
 
-skf = KFold(n_splits=8)
-for fold_idx, (train_idx, val_idx) in enumerate(skf.split(tiff_ids, tiff_ids)):
-    print(tiff_ids[val_idx])
-    # break
-    train_ds = HubDataset(DATA_PATH, tiff_ids[train_idx], window=WINDOW, overlap=MIN_OVERLAP,
-                          threshold=100, transform=train_trfm)
-    valid_ds = HubDataset(DATA_PATH, tiff_ids[val_idx], window=WINDOW, overlap=MIN_OVERLAP,
-                          threshold=100, transform=val_trfm, isvalid=False)
-    print(len(train_ds), len(valid_ds))
-    # define training and validation data loaders
-    train_loader = D.DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=12)
+    skf = KFold(n_splits=8)
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(tiff_ids, tiff_ids)):
+        print(tiff_ids[val_idx])
+        # break
+        train_ds = HubDataset(DATA_PATH, tiff_ids[train_idx], window=WINDOW, overlap=MIN_OVERLAP,
+                              threshold=100, transform=train_trfm)
+        valid_ds = HubDataset(DATA_PATH, tiff_ids[val_idx], window=WINDOW, overlap=MIN_OVERLAP,
+                              threshold=100, transform=val_trfm, isvalid=False)
+        print(len(train_ds), len(valid_ds))
+        # define training and validation data loaders
+        train_loader = D.DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=12)
 
-    val_loader = D.DataLoader(valid_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=12)
+        val_loader = D.DataLoader(valid_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=12)
 
-    model = get_unet_model()
-    model.to(DEVICE)
+        model = get_unet_model()
+        model.to(DEVICE)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-3)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-3)
 
-    lr_step = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 2)
-    # lr_step = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=5)
-    header = r'''
-            Train | Valid
-    Epoch |  Loss |  Loss | Time, m
-    '''
-    #          Epoch         metrics            time
-    raw_line = '{:6d}' + '\u2502{:7.3f}' * 2 + '\u2502{:6.2f}'
+        lr_step = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 2)
+        # lr_step = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=5)
+        header = r'''
+                Train | Valid
+        Epoch |  Loss |  Loss | Time, m
+        '''
+        #          Epoch         metrics            time
+        raw_line = '{:6d}' + '\u2502{:7.3f}' * 2 + '\u2502{:6.2f}'
 
-    best_dice = 0
-    for epoch in range(1, EPOCHES + 1):
-        start_time = time.time()
-        model.train()
-        train_loss = train(model, train_loader, loss_fn, optimizer)
-        val_dice = validation(model, val_loader, loss_fn)
-        lr_step.step(val_dice)
+        best_dice = 0
+        for epoch in range(1, EPOCHES + 1):
+            start_time = time.time()
+            model.train()
+            train_loss = train(model, train_loader, loss_fn, optimizer)
+            val_dice = validation(model, val_loader, loss_fn)
+            lr_step.step(val_dice)
 
-        if val_dice > best_dice:
-            best_dice = val_dice
-            torch.save(model.state_dict(), 'fold_{0}.pth'.format(fold_idx))
-        print(raw_line.format(epoch, train_loss, val_dice, best_dice, (time.time() - start_time) / 60 ** 1))
+            if val_dice > best_dice:
+                best_dice = val_dice
+                torch.save(model.state_dict(), 'fold_{0}.pth'.format(fold_idx))
+            print(raw_line.format(epoch, train_loss, val_dice, best_dice, (time.time() - start_time) / 60 ** 1))
 
-    del train_loader, val_loader, train_ds, valid_ds
-    gc.collect()
-    break
+        del train_loader, val_loader, train_ds, valid_ds
+        gc.collect()
+        break
+
