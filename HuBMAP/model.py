@@ -6,7 +6,7 @@ from torch import nn
 
 def get_unet_model():
     model = smp.Unet(
-        encoder_name='efficientnet-b7',
+        encoder_name='efficientnet-b1',
         encoder_weights='imagenet',
         in_channels=3,
         classes=1

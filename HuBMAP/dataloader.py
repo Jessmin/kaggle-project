@@ -23,6 +23,13 @@ def rle_encode(im):
     runs[1::2] -= runs[::2]
     return ' '.join(str(x) for x in runs)
 
+def rle_encode_less_memory(img):
+    pixels = img.T.flatten()
+    pixels[0] = 0
+    pixels[-1] = 0
+    runs = np.where(pixels[1:] != pixels[:-1])[0] + 2
+    runs[1::2] -= runs[::2]
+    return ' '.join(str(x) for x in runs)
 
 def rle_decode(mask_rle, shape=(256, 256)):
     '''
@@ -88,7 +95,6 @@ def make_grid(shape, window=256, min_overlap=32):
 
 
 identity = rasterio.Affine(1, 0, 0, 0, 1, 0)
-
 
 class HubDataset(D.Dataset):
 

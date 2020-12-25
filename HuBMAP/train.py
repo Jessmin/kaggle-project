@@ -5,9 +5,8 @@ import sys
 sys.path.append(path.join(path.dirname(__file__), '..'))
 
 import numpy as np
-import numba, cv2, gc
-import pathlib, sys, os, random, time
-import matplotlib.pyplot as plt
+import gc
+import os, random, time
 import albumentations as A
 import torch.utils.data as D
 from dataloader import HubDataset
@@ -15,7 +14,6 @@ from model import *
 from loss import *
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.model_selection import KFold
-import logging
 
 
 def set_seeds(seed=42):
@@ -28,28 +26,21 @@ def set_seeds(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
 
+
 set_seeds()
 
-writer = SummaryWriter()
+writer = SummaryWriter(log_dir='logs', flush_secs=60)
 
 DATA_PATH = '/home/zhaohoj/development_sshfs/dataset/kaggle-hubmap-kidney-segmentation/'
 # DATA_PATH = 'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/'
-pth_save_path = 'pth/model_best.pth'
-EPOCHES = 5
-BATCH_SIZE = 8
+pth_save_path = './pth'
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+EPOCHES = 5
+BATCH_SIZE = 4
 WINDOW = 1024
 MIN_OVERLAP = 40
 NEW_SIZE = 256
 
-
-# plt.figure(figsize=(16,8))
-# plt.subplot(121)
-# plt.imshow(mask[0], cmap='gray')
-# plt.subplot(122)
-# plt.imshow(image[0])
-
-# _ = rle_numba_encode(mask[0])  # compile function with numba
 
 def np_dice_score(probability, mask):
     p = probability.reshape(-1)
@@ -85,7 +76,6 @@ def validation(model, val_loader, criterion):
 
 
 train_trfm = A.Compose([
-    # A.RandomCrop(NEW_SIZE*3, NEW_SIZE*3),
     A.Resize(NEW_SIZE, NEW_SIZE),
     A.HorizontalFlip(p=0.5),
     A.VerticalFlip(p=0.5),
@@ -97,33 +87,13 @@ train_trfm = A.Compose([
         A.ColorJitter(brightness=0.07, contrast=0.07,
                       saturation=0.1, hue=0.1, always_apply=False, p=0.3),
     ], p=0.3),
-    #     A.OneOf([
-    #         A.OpticalDistortion(p=0.5),
-    #         A.GridDistortion(p=0.5),
-    #         A.IAAPiecewiseAffine(p=0.5),
-    #     ], p=0.3),
-    #     A.ShiftScaleRotate(),
 ])
 
 val_trfm = A.Compose([
-    # A.CenterCrop(NEW_SIZE, NEW_SIZE),
     A.Resize(NEW_SIZE, NEW_SIZE),
     A.HorizontalFlip(p=0.5),
     A.VerticalFlip(p=0.5),
     A.RandomRotate90(),
-    #     A.OneOf([
-    #         A.RandomContrast(),
-    #         A.RandomGamma(),
-    #         A.RandomBrightness(),
-    #         A.ColorJitter(brightness=0.07, contrast=0.07,
-    #                    saturation=0.1, hue=0.1, always_apply=False, p=0.3),
-    #         ], p=0.3),
-    #     A.OneOf([
-    #         A.OpticalDistortion(p=0.5),
-    #         A.GridDistortion(p=0.5),
-    #         A.IAAPiecewiseAffine(p=0.5),
-    #     ], p=0.3),
-    #     A.ShiftScaleRotate(),
 ])
 
 
@@ -141,7 +111,9 @@ def train(model, train_loader, criterion, optimizer):
         # print('train, ', loss.item())
     return np.array(losses).mean()
 
+
 if __name__ == '__main__':
+    start_time_program = time.time()
     import platform
 
     if platform.system() == 'Linux':
@@ -149,7 +121,7 @@ if __name__ == '__main__':
     else:
         tiff_ids = np.array([x.split('\\')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
 
-    skf = KFold(n_splits=8)
+    skf = KFold(n_splits=4)
     for fold_idx, (train_idx, val_idx) in enumerate(skf.split(tiff_ids, tiff_ids)):
         print(tiff_ids[val_idx])
         # break
@@ -168,8 +140,8 @@ if __name__ == '__main__':
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-3)
 
-        lr_step = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 2)
-        # lr_step = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=5)
+        # lr_step = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 2)
+        lr_step = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=5)
         header = r'''
                 Train | Valid
         Epoch |  Loss |  Loss | Time, m
@@ -183,14 +155,17 @@ if __name__ == '__main__':
             model.train()
             train_loss = train(model, train_loader, loss_fn, optimizer)
             val_dice = validation(model, val_loader, loss_fn)
+            writer.add_scalar(f'Train_loss_{fold_idx}', train_loss, epoch)
+            writer.add_scalar(f'Train_val_dice_{fold_idx}', val_dice, epoch)
             lr_step.step(val_dice)
 
             if val_dice > best_dice:
                 best_dice = val_dice
-                torch.save(model.state_dict(), 'fold_{0}.pth'.format(fold_idx))
+                torch.save(model.state_dict(), os.path.join(pth_save_path, 'fold_{0}.pth'.format(fold_idx)))
             print(raw_line.format(epoch, train_loss, val_dice, best_dice, (time.time() - start_time) / 60 ** 1))
 
         del train_loader, val_loader, train_ds, valid_ds
         gc.collect()
         break
-
+    end_time_program = time.time()
+    print(f'use-time:{end_time_program - start_time_program}')
