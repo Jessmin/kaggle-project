@@ -8,8 +8,11 @@ import numpy as np
 import numba
 from rasterio.windows import Window
 import cv2
+from PIL import Image
+import os
 
 identity = rasterio.Affine(1, 0, 0, 0, 1, 0)
+
 
 # used for converting the decoded image to rle mask
 def rle_encode(im):
@@ -23,6 +26,7 @@ def rle_encode(im):
     runs[1::2] -= runs[::2]
     return ' '.join(str(x) for x in runs)
 
+
 def rle_encode_less_memory(img):
     pixels = img.T.flatten()
     pixels[0] = 0
@@ -30,6 +34,7 @@ def rle_encode_less_memory(img):
     runs = np.where(pixels[1:] != pixels[:-1])[0] + 2
     runs[1::2] -= runs[::2]
     return ' '.join(str(x) for x in runs)
+
 
 def rle_decode(mask_rle, shape=(256, 256)):
     '''
@@ -72,6 +77,9 @@ def rle_numba_encode(image):
     return ' '.join(str(x) for x in points)
 
 
+idx = 0
+
+
 def make_grid(shape, window=256, min_overlap=32):
     """
         Return Array of size (N,4), where N - number of tiles,
@@ -93,8 +101,6 @@ def make_grid(shape, window=256, min_overlap=32):
             slices[i, j] = x1[i], x2[i], y1[j], y2[j]
     return slices.reshape(nx * ny, 4)
 
-
-identity = rasterio.Affine(1, 0, 0, 0, 1, 0)
 
 class HubDataset(D.Dataset):
 
@@ -134,6 +140,7 @@ class HubDataset(D.Dataset):
             with rasterio.open(filepath, transform=identity) as dataset:
                 self.masks.append(rle_decode(self.csv.loc[filename, 'encoding'], dataset.shape))
                 slices = make_grid(dataset.shape, window=self.window, min_overlap=self.overlap)
+                idx = 0
 
                 for slc in slices:
                     x1, x2, y1, y2 = slc
@@ -144,19 +151,31 @@ class HubDataset(D.Dataset):
 
                     image = cv2.resize(image, (256, 256))
                     masks = cv2.resize(self.masks[-1][x1:x2, y1:y2], (256, 256))
-
                     if self.isvalid:
                         self.slices.append([i, x1, x2, y1, y2])
                         self.x.append(image)
                         self.y.append(masks)
                         self.id.append(filename)
                     else:
+                        image_dir = f'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/use/{filename}/image/{idx:05d}.png'
+                        mask_dir = f'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/use/{filename}/mask/{idx:05d}.png'
+                        if not os.path.exists(os.path.dirname(image_dir)):
+                            os.makedirs(os.path.dirname(image_dir))
+                        if not os.path.exists(os.path.dirname(mask_dir)):
+                            os.makedirs(os.path.dirname(mask_dir))
+                        cv2.imwrite(image_dir, image)
+                        if masks.max() > 0:
+                            masks = (255 * (masks - masks.min()) / (masks.max() - masks.min())).astype(np.uint8)
+                        cv2.imwrite(mask_dir, masks)
+                        image = image_dir
+                        masks = mask_dir
+
                         if self.masks[-1][x1:x2, y1:y2].sum() >= self.threshold or (image > 32).mean() > 0.99:
                             self.slices.append([i, x1, x2, y1, y2])
-
                             self.x.append(image)
                             self.y.append(masks)
                             self.id.append(filename)
+                    idx += 1
 
     # get data operation
     def __getitem__(self, index):

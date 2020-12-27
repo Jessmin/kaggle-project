@@ -31,12 +31,13 @@ set_seeds()
 
 writer = SummaryWriter(log_dir='logs', flush_secs=60)
 
-DATA_PATH = '/home/zhaohoj/development_sshfs/dataset/kaggle-hubmap-kidney-segmentation/'
-# DATA_PATH = 'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/'
-pth_save_path = './pth'
+# DATA_PATH = '/home/zhaohoj/development_sshfs/dataset/kaggle-hubmap-kidney-segmentation/'
+DATA_PATH = 'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/'
+pth_save_path = 'pth'
+pth_save_path = os.path.join(path.dirname(__file__),pth_save_path)
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 EPOCHES = 5
-BATCH_SIZE = 4
+BATCH_SIZE = 3
 WINDOW = 1024
 MIN_OVERLAP = 40
 NEW_SIZE = 256
@@ -121,7 +122,7 @@ if __name__ == '__main__':
     else:
         tiff_ids = np.array([x.split('\\')[-1][:-5] for x in glob.glob(f'{DATA_PATH}train/*.tiff')])
 
-    skf = KFold(n_splits=4)
+    skf = KFold(n_splits=8)
     for fold_idx, (train_idx, val_idx) in enumerate(skf.split(tiff_ids, tiff_ids)):
         print(tiff_ids[val_idx])
         # break
@@ -161,7 +162,7 @@ if __name__ == '__main__':
 
             if val_dice > best_dice:
                 best_dice = val_dice
-                torch.save(model.state_dict(), os.path.join(pth_save_path, 'fold_{0}.pth'.format(fold_idx)))
+                torch.save(model.state_dict(), 'fold_{0}.pth'.format(fold_idx))
             print(raw_line.format(epoch, train_loss, val_dice, best_dice, (time.time() - start_time) / 60 ** 1))
 
         del train_loader, val_loader, train_ds, valid_ds

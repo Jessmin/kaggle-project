@@ -15,9 +15,11 @@ from model import get_unet_model
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # DATA_PATH = '/home/zhaohoj/development_sshfs/dataset/kaggle-hubmap-kidney-segmentation/'
-DATA_PATH = '/data/home/zhaohj/dev/dataset/kaggle-hubmap-kidney-segmentation/'
+# DATA_PATH = '/data/home/zhaohj/dev/dataset/kaggle-hubmap-kidney-segmentation/'
+DATA_PATH = 'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/'
+pth_path = 'D:\workspace\kaggle-project\HuBMAP/pth/'
 # pth_path = '/data/home/zhaohj/dev/dataset/pth/pth'
-pth_path = '/data/home/zhaohj/workspace/kaggle-project/HuBMAP/pth/'
+# pth_path = '/data/home/zhaohj/workspace/kaggle-project/HuBMAP/pth/'
 WINDOW = 1024
 MIN_OVERLAP = 40
 
@@ -28,7 +30,7 @@ NEW_SIZE = 256
 fold_models = []
 model = get_unet_model()
 model.to(DEVICE)
-model = torch.nn.DataParallel(model)
+# model = torch.nn.DataParallel(model)
 
 for fold_model_path in model_filepaths:
     model.load_state_dict(torch.load(fold_model_path))
