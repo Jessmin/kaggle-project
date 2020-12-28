@@ -115,7 +115,7 @@ class HubDataset(D.Dataset):
                                index_col=[0])
         self.threshold = threshold
         self.isvalid = isvalid
-
+        self.saved = False
         self.x, self.y, self.id = [], [], []
         self.build_slices()
         self.len = len(self.x)
@@ -129,57 +129,66 @@ class HubDataset(D.Dataset):
         self.masks = []
         self.files = []
         self.slices = []
+        source_img_path = os.path.join(self.path, 'used/source')
+        mask_img_path = os.path.join(self.path, 'used/mask')
+        if os.path.exists(source_img_path) and os.path.exists(mask_img_path) and not self.isvalid:
+            self.saved = True
+
         for i, filename in enumerate(self.csv.index.values):
             if not filename in self.tiff_ids:
                 continue
+            if not self.saved:
+                os.makedirs(source_img_path)
+                os.makedirs(mask_img_path)
+            if not self.saved:
+                filepath = (self.path / 'train' / (filename + '.tiff')).as_posix()
+                self.files.append(filepath)
+                # print('Transform', filename)
+                with rasterio.open(filepath, transform=identity) as dataset:
+                    self.masks.append(rle_decode(self.csv.loc[filename, 'encoding'], dataset.shape))
+                    slices = make_grid(dataset.shape, window=self.window, min_overlap=self.overlap)
+                    idx = 0
+                    for slc in slices:
+                        x1, x2, y1, y2 = slc
+                        image = dataset.read([1, 2, 3],
+                                             window=Window.from_slices((x1, x2), (y1, y2)))
+                        image = np.moveaxis(image, 0, -1)
 
-            filepath = (self.path / 'train' / (filename + '.tiff')).as_posix()
-            self.files.append(filepath)
-
-            # print('Transform', filename)
-            with rasterio.open(filepath, transform=identity) as dataset:
-                self.masks.append(rle_decode(self.csv.loc[filename, 'encoding'], dataset.shape))
-                slices = make_grid(dataset.shape, window=self.window, min_overlap=self.overlap)
-                idx = 0
-
-                for slc in slices:
-                    x1, x2, y1, y2 = slc
-                    # print(slc)
-                    image = dataset.read([1, 2, 3],
-                                         window=Window.from_slices((x1, x2), (y1, y2)))
-                    image = np.moveaxis(image, 0, -1)
-
-                    image = cv2.resize(image, (256, 256))
-                    masks = cv2.resize(self.masks[-1][x1:x2, y1:y2], (256, 256))
-                    if self.isvalid:
-                        self.slices.append([i, x1, x2, y1, y2])
-                        self.x.append(image)
-                        self.y.append(masks)
-                        self.id.append(filename)
-                    else:
-                        image_dir = f'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/use/{filename}/image/{idx:05d}.png'
-                        mask_dir = f'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/use/{filename}/mask/{idx:05d}.png'
-                        if not os.path.exists(os.path.dirname(image_dir)):
-                            os.makedirs(os.path.dirname(image_dir))
-                        if not os.path.exists(os.path.dirname(mask_dir)):
-                            os.makedirs(os.path.dirname(mask_dir))
-                        cv2.imwrite(image_dir, image)
-                        if masks.max() > 0:
-                            masks = (255 * (masks - masks.min()) / (masks.max() - masks.min())).astype(np.uint8)
-                        cv2.imwrite(mask_dir, masks)
-                        image = image_dir
-                        masks = mask_dir
-
-                        if self.masks[-1][x1:x2, y1:y2].sum() >= self.threshold or (image > 32).mean() > 0.99:
+                        image = cv2.resize(image, (256, 256))
+                        masks = cv2.resize(self.masks[-1][x1:x2, y1:y2], (256, 256))
+                        if self.isvalid:
                             self.slices.append([i, x1, x2, y1, y2])
                             self.x.append(image)
                             self.y.append(masks)
                             self.id.append(filename)
-                    idx += 1
+                        else:
+                            save_name = f'{filename}_{idx:05d}.png'
+                            image_saved_dir = os.path.join(source_img_path, save_name)
+                            mask_saved_dir = os.path.join(mask_img_path, save_name)
+                            if self.masks[-1][x1:x2, y1:y2].sum() >= self.threshold or (image > 32).mean() > 0.99:
+                                cv2.imwrite(image_saved_dir, image)
+                                cv2.imwrite(mask_saved_dir, 255 * masks)
+                                idx += 1
+            if not self.isvalid:
+                source_img_list = os.listdir(source_img_path)
+                source_img_list.sort()
+                mask_img_list = os.listdir(mask_img_path)
+                mask_img_list.sort()
+                self.x = [os.path.join(source_img_path, i) for i in source_img_list]
+                self.y = [os.path.join(mask_img_path, i) for i in mask_img_list]
+                #
+                #     self.slices.append([i, x1, x2, y1, y2])
+                #     self.x.append(image)
+                #     self.y.append(masks)
+                #     self.id.append(filename)
 
     # get data operation
     def __getitem__(self, index):
         image, mask = self.x[index], self.y[index]
+        image = Image.open(image)
+        mask = Image.open(mask)
+        image = np.array(image)
+        mask = np.array(mask) / 255
         augments = self.transform(image=image, mask=mask)
         return self.as_tensor(augments['image']), augments['mask'][None]
 
