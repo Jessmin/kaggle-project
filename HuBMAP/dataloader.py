@@ -133,13 +133,12 @@ class HubDataset(D.Dataset):
         mask_img_path = os.path.join(self.path, 'used/mask')
         if os.path.exists(source_img_path) and os.path.exists(mask_img_path) and not self.isvalid:
             self.saved = True
-
+        if not self.saved:
+            os.makedirs(source_img_path)
+            os.makedirs(mask_img_path)
         for i, filename in enumerate(self.csv.index.values):
             if not filename in self.tiff_ids:
                 continue
-            if not self.saved:
-                os.makedirs(source_img_path)
-                os.makedirs(mask_img_path)
             if not self.saved:
                 filepath = (self.path / 'train' / (filename + '.tiff')).as_posix()
                 self.files.append(filepath)
@@ -162,29 +161,44 @@ class HubDataset(D.Dataset):
                             self.y.append(masks)
                             self.id.append(filename)
                         else:
-                            save_name = f'{filename}_{idx:05d}.png'
+                            save_name = f'{filename}/{idx:05d}.png'
                             image_saved_dir = os.path.join(source_img_path, save_name)
                             mask_saved_dir = os.path.join(mask_img_path, save_name)
+                            if not os.path.exists(os.path.dirname(image_saved_dir)):
+                                os.mkdir(os.path.dirname(image_saved_dir))
+                            if not os.path.exists(os.path.dirname(mask_saved_dir)):
+                                os.mkdir(os.path.dirname(mask_saved_dir))
                             if self.masks[-1][x1:x2, y1:y2].sum() >= self.threshold or (image > 32).mean() > 0.99:
                                 cv2.imwrite(image_saved_dir, image)
                                 cv2.imwrite(mask_saved_dir, 255 * masks)
+                                del image
+                                del masks
                                 idx += 1
-            if not self.isvalid:
-                source_img_list = os.listdir(source_img_path)
+        if not self.isvalid:
+            filenames = os.listdir(source_img_path)
+            for filename in filenames:
+                sub_source_dir = os.path.join(source_img_path, filename)
+                sub_mask_dir = os.path.join(mask_img_path, filename)
+                source_img_list = os.listdir(sub_source_dir)
                 source_img_list.sort()
-                mask_img_list = os.listdir(mask_img_path)
+                mask_img_list = os.listdir(sub_mask_dir)
                 mask_img_list.sort()
-                self.x = [os.path.join(source_img_path, i) for i in source_img_list]
-                self.y = [os.path.join(mask_img_path, i) for i in mask_img_list]
-                #
-                #     self.slices.append([i, x1, x2, y1, y2])
-                #     self.x.append(image)
-                #     self.y.append(masks)
-                #     self.id.append(filename)
+                self.x = np.asarray(self.x)
+                self.y = np.asarray(self.y)
+                arr1 = [os.path.join(sub_source_dir, i) for i in source_img_list]
+                arr2 = [os.path.join(sub_mask_dir, i) for i in mask_img_list]
+                self.x = np.hstack((self.x, np.asarray(arr1)))
+                self.y = np.hstack((self.y, np.asarray(arr2)))
+            #     self.slices.append([i, x1, x2, y1, y2])
+            #     self.x.append(image)
+            #     self.y.append(masks)
+            #     self.id.append(filename)
 
     # get data operation
     def __getitem__(self, index):
         image, mask = self.x[index], self.y[index]
+        image = image.replace('\\', '/')
+        mask = mask.replace('\\', '/')
         image = Image.open(image)
         mask = Image.open(mask)
         image = np.array(image)

@@ -31,13 +31,13 @@ set_seeds()
 
 writer = SummaryWriter(log_dir='logs', flush_secs=60)
 
-DATA_PATH = '/home/zhaohoj/development_sshfs/dataset/kaggle-hubmap-kidney-segmentation/'
-# DATA_PATH = 'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/'
+# DATA_PATH = '/home/zhaohoj/development_sshfs/dataset/kaggle-hubmap-kidney-segmentation/'
+DATA_PATH = 'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/'
 pth_save_path = 'pth'
 pth_save_path = os.path.join(path.dirname(__file__), pth_save_path)
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-EPOCHES = 5
-BATCH_SIZE = 6
+EPOCHES = 100
+BATCH_SIZE = 8
 WINDOW = 1024
 MIN_OVERLAP = 40
 NEW_SIZE = 256
@@ -132,8 +132,8 @@ if __name__ == '__main__':
                               threshold=100, transform=val_trfm, isvalid=False)
         print(len(train_ds), len(valid_ds))
         # define training and validation data loaders
-        train_loader = D.DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=12)
-        val_loader = D.DataLoader(valid_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=12)
+        train_loader = D.DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
+        val_loader = D.DataLoader(valid_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
         model = get_unet_model()
         model.to(DEVICE)
 
@@ -160,11 +160,12 @@ if __name__ == '__main__':
 
             if val_dice > best_dice:
                 best_dice = val_dice
-                torch.save(model.state_dict(), 'fold_{0}.pth'.format(fold_idx))
+                print(f'best_dice:{fold_idx}:epoch:{epoch}')
+            torch.save(model.state_dict(), f'fold_{fold_idx}_epoch_{epoch}.pth')
             print(raw_line.format(epoch, train_loss, val_dice, best_dice, (time.time() - start_time) / 60 ** 1))
 
         del train_loader, val_loader, train_ds, valid_ds
         gc.collect()
-        break
+        # break
     end_time_program = time.time()
     print(f'use-time:{end_time_program - start_time_program}')
