@@ -35,12 +35,13 @@ writer = SummaryWriter(log_dir='logs', flush_secs=60)
 DATA_PATH = 'F:/Data/kaggle/kaggle-hubmap-kidney-segmentation/'
 pth_save_path = 'pth'
 pth_save_path = os.path.join(path.dirname(__file__), pth_save_path)
+pth_save_path = pth_save_path.replace('\\', '/')
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-EPOCHES = 100
+EPOCHES = 80
 BATCH_SIZE = 8
 WINDOW = 1024
 MIN_OVERLAP = 40
-NEW_SIZE = 256
+NEW_SIZE = 512
 
 
 def np_dice_score(probability, mask):
@@ -125,7 +126,6 @@ if __name__ == '__main__':
     skf = KFold(n_splits=8)
     for fold_idx, (train_idx, val_idx) in enumerate(skf.split(tiff_ids, tiff_ids)):
         print(tiff_ids[val_idx])
-        # break
         train_ds = HubDataset(DATA_PATH, tiff_ids[train_idx], window=WINDOW, overlap=MIN_OVERLAP,
                               threshold=100, transform=train_trfm)
         valid_ds = HubDataset(DATA_PATH, tiff_ids[val_idx], window=WINDOW, overlap=MIN_OVERLAP,
@@ -139,8 +139,8 @@ if __name__ == '__main__':
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-3)
 
-        # lr_step = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 2)
-        lr_step = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=5)
+        lr_step = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 2)
+        # lr_step = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=5)
         header = r'''
                 Train | Valid
         Epoch |  Loss |  Loss | Time, m
@@ -161,9 +161,9 @@ if __name__ == '__main__':
             if val_dice > best_dice:
                 best_dice = val_dice
                 print(f'best_dice:{fold_idx}:epoch:{epoch}')
-            torch.save(model.state_dict(), f'fold_{fold_idx}_epoch_{epoch}.pth')
-            print(raw_line.format(epoch, train_loss, val_dice, best_dice, (time.time() - start_time) / 60 ** 1))
-
+                pth_name = f'fold_{fold_idx}.pth'
+                torch.save(model.state_dict(), os.path.join(pth_save_path, pth_name))
+                print(raw_line.format(epoch, train_loss, val_dice, best_dice, (time.time() - start_time) / 60 ** 1))
         del train_loader, val_loader, train_ds, valid_ds
         gc.collect()
         # break

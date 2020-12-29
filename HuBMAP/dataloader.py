@@ -153,8 +153,8 @@ class HubDataset(D.Dataset):
                                              window=Window.from_slices((x1, x2), (y1, y2)))
                         image = np.moveaxis(image, 0, -1)
 
-                        image = cv2.resize(image, (256, 256))
-                        masks = cv2.resize(self.masks[-1][x1:x2, y1:y2], (256, 256))
+                        image = cv2.resize(image, (1024, 1024))
+                        masks = cv2.resize(self.masks[-1][x1:x2, y1:y2], (1024, 1024))
                         if self.isvalid:
                             self.slices.append([i, x1, x2, y1, y2])
                             self.x.append(image)
